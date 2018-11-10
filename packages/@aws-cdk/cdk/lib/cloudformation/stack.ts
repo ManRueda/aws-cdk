@@ -1,7 +1,7 @@
 import cxapi = require('@aws-cdk/cx-api');
 import { App } from '../app';
 import { Construct, PATH_SEP } from '../core/construct';
-import { resolve, Token } from '../core/tokens';
+import { freezeTokens, resolve, Token } from '../core/tokens';
 import { Environment } from '../environment';
 import { CloudFormationToken } from './cloudformation-token';
 import { HashedAddressingScheme, IAddressingScheme, LogicalIDs } from './logical-id';
@@ -155,7 +155,7 @@ export class Stack extends Construct {
 
     // merge in all CloudFormation fragments collected from the tree
     for (const fragment of fragments) {
-      merge(template, fragment);
+      merge(template, resolve(fragment));
     }
 
     this.logicalIds.assertAllRenamesApplied();
@@ -411,6 +411,10 @@ export abstract class StackElement extends Construct implements IDependable {
     if (!this.frozen) {
       throw new Error('StackElement must be frozen before it is synthesized');
     }
+    if (!this.frozenRepresentation) {
+      // tslint:disable-next-line:no-console
+      console.log('Empty', this);
+    }
     return this.frozenRepresentation!;
   }
 
@@ -420,9 +424,8 @@ export abstract class StackElement extends Construct implements IDependable {
     this.freezeChildren();
 
     const stack = Stack.find(this);
-    this.frozenRepresentation = resolve(this.renderCloudFormation(), {
-        context: { stack }
-    });
+    // tslint:disable-next-line:no-console
+    this.frozenRepresentation = freezeTokens(this.renderCloudFormation(), { stack });
   }
 }
 

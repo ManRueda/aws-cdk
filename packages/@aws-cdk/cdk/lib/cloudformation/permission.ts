@@ -14,7 +14,7 @@ export class PolicyDocument extends Token {
     super();
   }
 
-  public resolve(): any {
+  public resolve(_context: ContextMap): any {
     if (this.isEmpty) {
       return undefined;
     }

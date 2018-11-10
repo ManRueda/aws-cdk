@@ -346,7 +346,7 @@ export = {
     test.done();
   },
 
-  'construct.lock() protects against adding children anywhere under this construct (direct or indirect)'(test: Test) {
+  'freezing protects against adding children anywhere under this construct (direct or indirect)'(test: Test) {
 
     class LockableConstruct extends Construct {
       public lockMe() {
@@ -366,9 +366,9 @@ export = {
 
     // now we should still be able to add children to c0b, but not to c0a or any its children
     new Construct(c0b, 'c1a');
-    test.throws(() => new Construct(c0a, 'fail1'), /Cannot add children to "c0a" during synthesis/);
-    test.throws(() => new Construct(c1a, 'fail2'), /Cannot add children to "c0a\/c1a" during synthesis/);
-    test.throws(() => new Construct(c1b, 'fail3'), /Cannot add children to "c0a\/c1b" during synthesis/);
+    test.throws(() => new Construct(c0a, 'fail1'), /Cannot add children to "c0a" after freezing/);
+    test.throws(() => new Construct(c1a, 'fail2'), /Cannot add children to "c0a\/c1a" after freezing/);
+    test.throws(() => new Construct(c1b, 'fail3'), /Cannot add children to "c0a\/c1b" after freezing/);
 
     test.done();
   }

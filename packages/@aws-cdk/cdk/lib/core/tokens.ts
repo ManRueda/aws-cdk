@@ -8,12 +8,6 @@ export const RESOLVE_METHOD = 'resolve';
 
 export type ContextMap = {[key: string]: any};
 
-export interface ResolveOptions {
-    context?: ContextMap;
-
-    prefix?: string[];
-}
-
 /**
  * Represents a special or lazily-evaluated value.
  *
@@ -59,6 +53,20 @@ export class Token {
     }
 
     return value;
+  }
+
+  /**
+   * Return a frozen version of this Token in the given context
+   *
+   * A frozen Token should not change anymore.
+   *
+   * The default implementation makes lazy values concrete.
+   */
+  public freeze(context: ContextMap): Token {
+    if (typeof(this.valueOrFunction) === 'function') {
+      return new Token(freezeTokens(this.valueOrFunction(context), context));
+    }
+    return this;
   }
 
   /**
@@ -122,6 +130,16 @@ export function unresolved(obj: any): obj is Token {
   }
 }
 
+type TokenTransform = (t: Token) => any;
+type StringTransform = (s: string) => any;
+
+interface ResolveOptions {
+    context?: ContextMap;
+    tokenTransform: TokenTransform;
+    tokenizedStringTransform: StringTransform;
+    prefix?: string[];
+}
+
 /**
  * Resolves an object by evaluating all tokens and removing any undefined or empty objects or arrays.
  * Values can only be primitives, arrays or tokens. Other objects (i.e. with methods) will be rejected.
@@ -129,9 +147,24 @@ export function unresolved(obj: any): obj is Token {
  * @param obj The object to resolve.
  * @param options Resolution options (prefix and context)
  */
-export function resolve(obj: any, options: ResolveOptions = {}): any {
+export function resolve(obj: any, context: ContextMap = {}): any {
+  return recurseTokens(obj, {
+    context,
+    tokenTransform(t: Token) { return resolve(t.resolve(context), context); },
+    tokenizedStringTransform(s: string) { return TOKEN_STRING_MAP.resolveMarkers(s, context); }
+  });
+}
+
+export function freezeTokens(obj: any, context: ContextMap = {}): any {
+  return recurseTokens(obj, {
+    context,
+    tokenTransform(t: Token) { return t.freeze(context); },
+    tokenizedStringTransform(s: string) { return TOKEN_STRING_MAP.freezeMarkers(s, context); }
+  });
+}
+
+function recurseTokens(obj: any, options: ResolveOptions): any {
   const prefix = options.prefix || [ ];
-  const context = options.context || {};
   const pathName = '/' + prefix.join('/');
 
   // protect against cyclic references by limiting depth.
@@ -167,7 +200,8 @@ export function resolve(obj: any, options: ResolveOptions = {}): any {
   // string - potentially replace all stringified Tokens
   //
   if (typeof(obj) === 'string') {
-    return TOKEN_STRING_MAP.resolveMarkers(obj as string);
+    if (!unresolved(obj)) { return obj; } // Short-circuit for faster evaluation
+    return options.tokenizedStringTransform(obj as string);
   }
 
   //
@@ -183,8 +217,7 @@ export function resolve(obj: any, options: ResolveOptions = {}): any {
   //
 
   if (unresolved(obj)) {
-    const value = obj[RESOLVE_METHOD](context);
-    return resolve(value, { context, prefix });
+    return options.tokenTransform(obj as Token);
   }
 
   //
@@ -193,7 +226,7 @@ export function resolve(obj: any, options: ResolveOptions = {}): any {
 
   if (Array.isArray(obj)) {
     const arr = obj
-      .map((x, i) => resolve(x, { context, prefix: prefix.concat(i.toString()) }))
+      .map((x, i) => recurseTokens(x, { ...options, prefix: prefix.concat(i.toString()) }))
       .filter(x => typeof(x) !== 'undefined');
 
     return arr;
@@ -217,7 +250,7 @@ export function resolve(obj: any, options: ResolveOptions = {}): any {
       throw new Error(`The key "${key}" has been resolved to ${JSON.stringify(resolvedKey)} but must be resolvable to a string`);
     }
 
-    const value = resolve(obj[key], { context, prefix: prefix.concat(key) });
+    const value = recurseTokens(obj[key], { ...options, prefix: prefix.concat(key) });
 
     // skip undefined
     if (typeof(value) === 'undefined') {
@@ -279,12 +312,25 @@ class TokenStringMap {
   }
 
   /**
+   * Parse the string and return the fragments
+   */
+  public parse(s: string) {
+    const str = this.createTokenString(s);
+    return str.split(this.lookupToken.bind(this));
+  }
+
+  /**
    * Replace any Token markers in this string with their resolved values
    */
-  public resolveMarkers(s: string): any {
-    const str = this.createTokenString(s);
-    const fragments = str.split(this.lookupToken.bind(this));
-    return fragments.join();
+  public resolveMarkers(s: string, context: ContextMap): any {
+    return this.parse(s).resolve(context);
+  }
+
+  /**
+   * Freeze any Tokens markers in this string, producing a new string
+   */
+  public freezeMarkers(s: string, context: ContextMap): string {
+    return this.parse(s).mapTokens(x => x.freeze(context)).toString();
   }
 
   /**
@@ -404,13 +450,25 @@ class TokenStringFragments {
   }
 
   /**
+   * Apply a function to all tokens
+   */
+  public mapTokens(fn: TokenTransform) {
+    const ret = new TokenStringFragments();
+    for (const fragment of this.fragments) {
+      if (fragment.type === 'string') { ret.addString(fragment.str); }
+      if (fragment.type === 'token') { ret.addToken(fn(fragment.token)); }
+    }
+    return ret;
+  }
+
+  /**
    * Combine the resolved string fragments using the Tokens to join.
    *
    * Resolves the result.
    */
-  public join(): any {
+  public resolve(context: ContextMap): any {
     if (this.fragments.length === 0) { return ''; }
-    if (this.fragments.length === 1) { return resolveFragment(this.fragments[0]); }
+    if (this.fragments.length === 1) { return resolveFragment(this.fragments[0], context); }
 
     const first = this.fragments[0];
 
@@ -427,19 +485,32 @@ class TokenStringFragments {
     }
 
     while (i < this.fragments.length) {
-      token = token.concat(undefined, resolveFragment(this.fragments[i]));
+      token = token.concat(undefined, resolveFragment(this.fragments[i], context));
       i++;
     }
 
-    return resolve(token);
+    return resolve(token, context);
+  }
+
+  /**
+   * Turn the fragments back into a string
+   */
+  public toString() {
+    return this.fragments.map(x => {
+      if (x.type === 'string') {
+        return x.str;
+      } else {
+        return x.token.toString();
+      }
+    }).join('');
   }
 }
 
 /**
  * Resolve the value from a single fragment
  */
-function resolveFragment(fragment: Fragment): any {
-  return fragment.type === 'string' ? fragment.str : resolve(fragment.token);
+function resolveFragment(fragment: Fragment, context: ContextMap): any {
+  return fragment.type === 'string' ? fragment.str : resolve(fragment.token, context);
 }
 
 /**

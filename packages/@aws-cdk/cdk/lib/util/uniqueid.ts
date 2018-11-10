@@ -37,8 +37,9 @@ export function makeUniqueId(components: string[]) {
 
   // top-level resources will simply use the `name` as-is in order to support
   // transparent migration of cloudformation templates to the CDK without the
-  // need to rename all resources.
-  if (components.length === 1) {
+  // need to rename all resources. But if the top-level name contains illegal
+  // characters, we still apply the regular ID hashing scheme.
+  if (components.length === 1 && (components[0] === undefined || removeNonAlphanumeric(components[0]) === components[0])) {
     return components[0];
   }
 

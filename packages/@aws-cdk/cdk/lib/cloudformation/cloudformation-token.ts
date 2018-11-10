@@ -25,15 +25,19 @@ export class StackAwareCloudFormationToken extends CloudFormationToken {
       this.tokenStack = Stack.find(anchor);
   }
 
-  public resolve(context: ContextMap): any {
+  public freeze(context: ContextMap): Token {
+      // tslint:disable-next-line:no-console
+      console.log('Freezing me ', context);
       const consumingStack = context.stack;
       if (consumingStack && this.tokenStack !== consumingStack) {
           // We're trying to resolve a cross-stack reference
           consumingStack.addStackDependency(this.tokenStack);
+          // tslint:disable-next-line:no-console
+          console.log('Freezing!', this);
           return this.tokenStack.exportValue(this, consumingStack);
       }
       // Stack-local resolution
-      return super.resolve(context);
+      return this;
   }
 }
 
